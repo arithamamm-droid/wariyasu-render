@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080, height=1920">
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<title>fable: たとえ話(まると はかり)</title>
+<!--
+ 本番版(HyperFrames)。先頭1.0秒=ポスター、そのあと本編25秒(合計26秒)。絵は draw(t) だけで決まる(乱数・Date・無限アニメなし)。
+ GSAP の paused タイムラインが時刻を state.t に流し込み、setter から render(T) → draw(T-1.0) を呼ぶ。
+ 参考にした道具: https://github.com/HeyChengC/vibe-knowledge-film (LICENSE は MIT だが著作権者名の記載なし:「Copyright (c) 2026」のみ)。
+ 参照したのは寓言モードの「作り方」(平らな色面+少しの細部、遠景/キャラ/前景の3層と視差、1シーン1主役、
+ 重さの表現=加速して落ちて弾む+足元の影、字幕は下に暗い帯+1字ずつ現れる、結びで冒頭に戻す)だけ。
+ コード・例の動画・字幕・画面設計は一切コピーしていない。キャラクター・背景・文面はすべてこのページ用に自作。
+ フォント: DelaGothicOne / NotoSansJP(assets/fonts/。videos/_fonts と同じファイル)。
+ 数字の出どころ: 10,000円・3kg・10kg・3,333円/kg・1,000円/kg・3.3倍 は videos/remake-intro-waybill/POST.md の例と同じ(「数字は例です」を左下に表示)。
+ 数字は例です: 寄付額 10,000円 / 3kg / 10kg は videos/remake-intro-waybill/BRIEF.md の例の範囲。
+-->
+<style>
+@font-face{font-family:Dela;src:url(assets/fonts/DelaGothicOne-Regular.ttf);font-display:block}
+@font-face{font-family:Noto;src:url(assets/fonts/NotoSansJP-VF.ttf);font-weight:100 900;font-display:block}
+html,body{margin:0;width:1080px;height:1920px;overflow:hidden;background:#000;color:#ddd;font-family:Noto,sans-serif}
+#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#16181b}
+#world{position:absolute;left:0;top:0;width:360px;height:640px;transform:scale(3);transform-origin:0 0;visibility:hidden}
+#poster{position:absolute;left:0;top:0;width:1080px;height:1920px;display:block;transform-origin:540px 960px;will-change:transform}
+#stage{position:relative;flex:none;width:360px;height:640px;overflow:hidden;background:#d9c7a1;font-weight:800}
+#art{position:absolute;left:0;top:0;display:block}
+.ov{position:absolute;inset:0;pointer-events:none}
+#vig{background:radial-gradient(ellipse 90% 75% at 50% 46%,rgba(0,0,0,0) 52%,rgba(25,12,0,.42) 100%)}
+#grain{opacity:.17;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5  0 0 0 0 .5  0 0 0 0 .5  0 0 0 1.4 -.25'/></filter><rect width='180' height='180' filter='url(%23n)'/></svg>")}
+#capBg{position:absolute;left:0;right:0;top:392px;height:140px;pointer-events:none;background:linear-gradient(rgba(30,16,4,0),rgba(30,16,4,.5) 34%,rgba(30,16,4,.5) 76%,rgba(30,16,4,0))}
+#cap{position:absolute;left:40px;width:260px;top:420px;text-align:center;color:#fff}
+#cap .ln{display:table;margin:0 auto;white-space:nowrap;font:900 25px/1.32 Noto,sans-serif;letter-spacing:.02em;height:33px;transform-origin:center top}
+#cap .ch{display:inline-block;white-space:pre;-webkit-text-stroke:3.4px rgba(38,22,8,.9);paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,.45)}
+#cap .hl{display:inline-block;border-radius:6px;padding:0 3px;margin:0 1px}
+#cap .hl .ch{color:#23262b;-webkit-text-stroke:0;text-shadow:none}
+.note{position:absolute;font:700 8.5px/1.3 Noto;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.9),0 0 6px rgba(0,0,0,.6)}
+#nL{left:8px;bottom:8px}
+#nL b{display:inline-block;background:rgba(30,18,6,.55);border:1px solid rgba(255,255,255,.55);border-radius:99px;padding:2px 8px;font-weight:800}
+#nR{right:8px;bottom:8px;text-align:right}
+#fade{background:#e8dcc0}
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="26" data-width="1080" data-height="1920">
+<div id="world"><div id="stage">
+<svg id="art" width="360" height="640" viewBox="0 0 360 640" xmlns="http://www.w3.org/2000/svg"></svg>
+<div id="capBg"></div>
+<div id="cap"></div>
+<div class="ov" id="vig"></div>
+<div class="ov" id="grain"></div>
+<div class="note" id="nL"><b id="nLt">たとえ話です</b></div>
+<div class="note" id="nR"></div>
+<div class="ov" id="fade"></div>
+</div></div>
+<img id="poster" src="assets/poster.jpg" alt="">
+</div>
+
+<script>
+(()=>{
+'use strict';
+const GY=392;
+const INK='#23262b', YEL='#FFD23F';
+const C=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const L=(a,b,u)=>a+(b-a)*u;
+const E={lin:x=>x,io:x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2,out:x=>1-Math.pow(1-x,3),in:x=>x*x*x,
+  back:x=>{const c=1.70158;return 1+(c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2)},sin:x=>.5-.5*Math.cos(Math.PI*x)};
+// キーフレーム補間。[時刻,値,次の区間のイージング]
+function kf(t,p){
+  if(t<=p[0][0])return p[0][1];
+  for(let i=0;i<p.length-1;i++){const a=p[i],b=p[i+1];
+    if(t<b[0]){const u=(t-a[0])/(b[0]-a[0]);return L(a[1],b[1],E[a[2]||'io'](u));}}
+  return p[p.length-1][1];
+}
+const sp=(s,k,w)=>s<0?0:Math.exp(-k*s)*Math.cos(w*s);      // 減衰ばね(1→0)
+const hs=n=>{const x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)};
+const f2=n=>(+n).toFixed(2);
+
+// ---- ぴょん(つぶれ→伸び→着地でつぶれ)。[開始,滞空,高さ,伸び量]
+function hopFx(t,t0,air,h,st){
+  st=st==null?.22:st;const pre=.14,land=.32,a=C(.35+h/70,.35,1);
+  if(t<t0-pre||t>t0+air+land)return null;
+  if(t<t0){const q=E.sin((t-(t0-pre))/pre);return{dy:0,sy:1-.2*a*q,sx:1+.14*a*q};}
+  if(t<=t0+air){const u=(t-t0)/air,v=Math.abs(1-2*u);
+    const ty=1+st*v*(.4+.6*a)-.04*(1-v);const sy=L(1-.2*a,ty,C((t-t0)/.06));
+    return{dy:h*4*u*(1-u),sy,sx:1/Math.pow(sy,.8)};}
+  const s=t-t0-air,q=a*.32*Math.exp(-9*s)*Math.cos(24*s);
+  return{dy:0,sy:1-q,sx:1+q*.8};
+}
+function hops(t,list){let dy=0,sx=1,sy=1;for(const h of list){const f=hopFx(t,h[0],h[1],h[2],h[3]);if(f){dy+=f.dy;sx*=f.sx;sy*=f.sy;}}return{dy,sx,sy};}
+
+// =====================================================================
+// 部品のSVG
+// =====================================================================
+function bag(w,h){
+  return `<rect x="${-w/2}" y="${-h}" width="${w}" height="${h}" rx="${w*.3}" fill="url(#gBag)" stroke="#b9a87f" stroke-width=".8"/>`+
+  `<path d="M${-w*.28} ${-h+1} L${-w*.4} ${-h-h*.17} L${-w*.12} ${-h-h*.08} L0 ${-h-h*.2} L${w*.12} ${-h-h*.08} L${w*.4} ${-h-h*.17} L${w*.28} ${-h+1}Z" fill="#efe3c6" stroke="#b9a87f" stroke-width=".7"/>`+
+  `<rect x="${-w/2+.5}" y="${-h*.62}" width="${w-1}" height="${h*.22}" fill="${YEL}" opacity=".95"/>`+
+  `<ellipse cx="${-w*.2}" cy="${-h*.8}" rx="${w*.1}" ry="${h*.12}" fill="#fff" opacity=".55"/>`;
+}
+function wad(r,x,y,rot){
+  return `<g transform="translate(${x},${y}) rotate(${rot})"><circle r="${r}" fill="#e6dfcc" stroke="#b9b09a" stroke-width=".8"/>`+
+  `<path d="M${-r*.7} ${-r*.1} L${-r*.2} ${-r*.5} L${r*.1} ${r*.1} L${r*.6} ${-r*.3} M${-r*.4} ${r*.5} L0 ${r*.2} L${r*.4} ${r*.6}" fill="none" stroke="#b3aa94" stroke-width=".9" stroke-linejoin="round"/></g>`;
+}
+function star(n,ro,ri){let d='';for(let i=0;i<n*2;i++){const r=i%2?ri:ro,a=Math.PI*i/n-Math.PI/2;d+=(i?'L':'M')+f2(Math.cos(a)*r)+' '+f2(Math.sin(a)*r);}return d+'Z';}
+
+function boxSVG(id,w,h,kind){
+  const hw=w/2;let items='',ax;
+  if(kind==='A'){
+    items+=[[-36,-8,8,10],[37,-8,8,-20],[-12,-40,9,30],[16,-42,10,0]].map(a=>wad(a[2],a[0],a[1],a[3])).join('');
+    items+=[-24,0,24].map((x,i)=>`<g id="${id}b${i}"><g transform="translate(${x},-5)">${bag(22,30)}</g></g>`).join('');
+    ax=-hw+34;
+  }else{
+    let s='';
+    for(let i=0;i<5;i++)s+=`<g id="${id}c${i}"><g transform="translate(${(i-2)*14.5},-24)">${bag(13.5,19)}</g></g>`;
+    s+=`<rect x="${-hw}" y="${-h}" width="${w}" height="${h}" fill="#3a2410" opacity=".22"/>`;
+    for(let i=0;i<5;i++)s+=`<g id="${id}b${i}"><g transform="translate(${(i-2)*14.5},-5)">${bag(13.5,19)}</g></g>`;
+    items=s;ax=-hw+32;
+  }
+  const front=`<g id="${id}fr">`+
+    `<rect x="${-hw}" y="${-h}" width="${w}" height="${h}" fill="url(#gKraft)" stroke="#8a5e30" stroke-width="1.2"/>`+
+    `<rect x="${-hw}" y="${-h}" width="${w}" height="${h}" fill="url(#pCorr)"/>`+
+    `<rect x="${-hw}" y="${-h}" width="${w}" height="9" fill="#a8763a" opacity=".5"/>`+
+    `<g id="${id}tp"><rect x="-6.5" y="${-h}" width="13" height="${h}" fill="#ecdcae" opacity=".92"/><rect x="-6.5" y="${-h}" width="3" height="${h}" fill="#fff" opacity=".35"/></g>`+
+    `<g id="${id}tc" transform="translate(0,${-h})"><rect x="-6.5" y="-14" width="13" height="14" fill="#ecdcae" opacity=".92"/></g>`+
+    (kind==='A'?`<g id="${id}st" transform="translate(${hw-14},${-h+36}) rotate(-12)"><path d="${star(10,22,16)}" fill="#E5391B" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><text y="5" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="12.5" fill="#fff">お得!</text></g>`:'')+
+    `<g id="${id}tg" transform="translate(${ax},${-h+9})"><g id="${id}tgr">`+
+      `<path d="M0 0 L0 12" stroke="#6b4a22" stroke-width="1.4"/>`+
+      `<g transform="translate(0,12)"><rect x="-31" y="0" width="62" height="23" rx="5" fill="${YEL}" stroke="${INK}" stroke-width="1.5" filter="url(#fDrop1)"/>`+
+      `<circle cx="-24" cy="5.5" r="2.1" fill="#6b4a22"/><text x="3" y="17" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="11.5" fill="${INK}">10,000円</text></g></g></g>`+
+    `</g>`;
+  return `<g id="${id}"><g id="${id}in">`+
+    `<rect x="${-hw}" y="${-h}" width="${w}" height="${h}" fill="url(#gInside)" stroke="#5b3d22" stroke-width="1.2"/>`+
+    `<g id="${id}fl"><path d="M${-hw} ${-h} L${-hw-7} ${-h-26} L${-4} ${-h-22} L0 ${-h}Z" fill="#c8975a" stroke="#8a5e30" stroke-width="1"/>`+
+    `<path d="M${hw} ${-h} L${hw+7} ${-h-26} L4 ${-h-22} L0 ${-h}Z" fill="#d6a468" stroke="#8a5e30" stroke-width="1"/></g>`+
+    `<g id="${id}it">${items}</g>`+front+`</g></g>`;
+}
+
+function build(){
+  const svg=document.getElementById('art');
+  let s=`<defs>
+  <linearGradient id="gWallG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EAD9B4"/><stop offset=".7" stop-color="#E2CDA2"/><stop offset="1" stop-color="#D3B88A"/></linearGradient>
+  <linearGradient id="gFloorG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#B4844F"/><stop offset=".5" stop-color="#9C6D3F"/><stop offset="1" stop-color="#7C532D"/></linearGradient>
+  <linearGradient id="gBoard" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C7A878"/><stop offset="1" stop-color="#B08F60"/></linearGradient>
+  <linearGradient id="gKraft" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#DDAC6E"/><stop offset=".6" stop-color="#C99556"/><stop offset="1" stop-color="#B4803F"/></linearGradient>
+  <linearGradient id="gInside" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a3019"/><stop offset="1" stop-color="#8a6236"/></linearGradient>
+  <radialGradient id="gMaru" cx=".35" cy=".28" r=".85"><stop offset="0" stop-color="#FFF0A0"/><stop offset=".45" stop-color="#FFCF33"/><stop offset="1" stop-color="#E49A0C"/></radialGradient>
+  <linearGradient id="gHak" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5058"/><stop offset="1" stop-color="#23262b"/></linearGradient>
+  <linearGradient id="gPlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef0f2"/><stop offset="1" stop-color="#aab0b8"/></linearGradient>
+  <linearGradient id="gBag" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fffaf0"/><stop offset=".6" stop-color="#f3e8cf"/><stop offset="1" stop-color="#dccfae"/></linearGradient>
+  <radialGradient id="gSpot" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff2c0" stop-opacity=".85"/><stop offset="1" stop-color="#fff2c0" stop-opacity="0"/></radialGradient>
+  <linearGradient id="gCone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff6d6" stop-opacity=".55"/><stop offset="1" stop-color="#fff6d6" stop-opacity="0"/></linearGradient>
+  <linearGradient id="gAw" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".05"/><stop offset="1" stop-color="#3a1c00" stop-opacity=".32"/></linearGradient>
+  <pattern id="pWeave" width="3" height="3" patternUnits="userSpaceOnUse"><rect width="3" height="1.2" fill="#000" opacity=".1"/><rect width="1.2" height="3" fill="#fff" opacity=".12"/></pattern>
+  <pattern id="pCorr" width="5" height="4" patternUnits="userSpaceOnUse"><rect width="5" height="1" fill="#000" opacity=".07"/></pattern>
+  <filter id="fPaper" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".03 .045" numOctaves="3" seed="4" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 .42  0 0 0 0 .3  0 0 0 0 .17  0 0 0 .9 -.3"/></filter>
+  <filter id="fWood" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".008 .32" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 .22  0 0 0 0 .12  0 0 0 0 .04  0 0 0 1.1 -.4"/></filter>
+  <filter id="fB1" x="-5%" y="-30%" width="110%" height="160%"><feGaussianBlur stdDeviation=".9"/></filter>
+  <filter id="fB2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+  <filter id="fB4" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4.5"/></filter>
+  <filter id="fB9" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="9"/></filter>
+  <filter id="fDrop1" x="-20%" y="-20%" width="150%" height="170%"><feDropShadow dx="1" dy="2" stdDeviation="1.4" flood-color="#2a1500" flood-opacity=".45"/></filter>
+  <filter id="fDrop2" x="-30%" y="-30%" width="170%" height="170%"><feDropShadow dx="2" dy="4" stdDeviation="3" flood-color="#2a1500" flood-opacity=".45"/></filter>
+  <filter id="fDrop3" x="-30%" y="-30%" width="170%" height="170%"><feDropShadow dx="2" dy="5" stdDeviation="4" flood-color="#1c0e00" flood-opacity=".5"/></filter>
+  <g id="bubS"><circle cx="-20" cy="2" r="15"/><circle cx="-2" cy="-8" r="19"/><circle cx="19" cy="-2" r="16"/><rect x="-22" y="-6" width="44" height="22" rx="10"/></g>
+  </defs>`;
+
+  // ---------- 遠景(壁): 紙のような壁・ひさし・ランプの光
+  let aw='';
+  for(let i=0;i<22;i++){const x0=-190+i*36;
+    aw+=`<path d="M${x0} 34 H${x0+36} V104 Q${x0+18} 128 ${x0} 104Z" fill="${i%2?'#FBF1D6':YEL}"/>`;}
+  let boards='';
+  for(let i=0;i<24;i++)boards+=`<rect x="${-190+i*34}" y="270" width="2" height="90" fill="#5a3a18" opacity=".18"/>`;
+
+  let shelf='';
+  const jarCols=['#b98d5a','#d9c39a','#a9794a','#e6d3a6','#9c6b3f'];
+  [[-60,14],[-30,10],[0,16],[34,12],[62,18],[96,11],[126,15],[240,13],[270,17],[304,11],[336,15],[366,12],[398,16]].forEach((j,i)=>{
+    const h=22+hs(i)*22,w=j[1]+8;
+    shelf+=`<g transform="translate(${j[0]},260)"><rect x="${-w/2}" y="${-h}" width="${w}" height="${h}" rx="4" fill="${jarCols[i%5]}" opacity=".85"/><rect x="${-w/2+2}" y="${-h+3}" width="${w*.3}" height="${h-8}" rx="2" fill="#fff" opacity=".22"/><rect x="${-w/2-1}" y="${-h-5}" width="${w+2}" height="6" rx="2" fill="#6a4a26" opacity=".7"/></g>`;});
+  let bunt='';
+  for(let i=0;i<22;i++){const x=-10+i*18.5,u=(x+10)/380,y=126+22*4*u*(1-u);
+    bunt+=`<path d="M${f2(x-8)} ${f2(y-1)} L${f2(x+8)} ${f2(y-1)} L${f2(x)} ${f2(y+19)}Z" fill="${['#FFD23F','#FBF1D6','#3b4048'][i%3]}" opacity=".95"/>`;}
+  let bokeh='';
+  [[40,150,22],[300,170,30],[250,120,14],[95,220,16],[330,250,20],[20,285,12]].forEach(b=>{bokeh+=`<circle cx="${b[0]}" cy="${b[1]}" r="${b[2]}" fill="#fff4cf" opacity=".28" filter="url(#fB2)"/>`;});
+  s+=`<g id="gWall">
+    <rect x="-200" y="-150" width="760" height="520" fill="url(#gWallG)"/>
+    <rect x="-200" y="-150" width="760" height="520" filter="url(#fPaper)" opacity=".3" style="mix-blend-mode:multiply"/>
+    ${bokeh}
+    <g filter="url(#fB1)">${shelf}</g><rect x="-200" y="259" width="760" height="6" fill="#7a5428" opacity=".8"/><rect x="-200" y="265" width="760" height="10" fill="#3a1c00" opacity=".18" filter="url(#fB2)"/>
+    <rect x="-200" y="268" width="760" height="100" fill="url(#gBoard)"/>${boards}
+    <rect x="-200" y="264" width="760" height="7" fill="#e9d6ad"/><rect x="-200" y="271" width="760" height="3" fill="#5a3a18" opacity=".3"/>
+    <rect x="-200" y="340" width="760" height="9" fill="#6a4a26"/>
+    <polygon points="150,60 210,60 330,370 30,370" fill="url(#gCone)" style="mix-blend-mode:screen"/>
+    <rect x="-200" y="100" width="760" height="60" fill="#3a1c00" opacity=".28" filter="url(#fB9)"/>
+    <path d="M-10 126 Q180 170 370 126" fill="none" stroke="#6a4a26" stroke-width="1.3"/><g filter="url(#fB1)">${bunt}</g>
+    <g>${aw}</g>
+    <rect x="-200" y="30" width="760" height="100" fill="url(#pWeave)"/>
+    <rect x="-200" y="30" width="760" height="100" fill="url(#gAw)"/>
+    <rect x="-200" y="26" width="760" height="8" fill="#a86f1c" opacity=".7"/>
+  </g>`;
+  // ---------- 床
+  let planks='';
+  const rows=[348,372,404,446,500,570,660];
+  rows.forEach((y,i)=>{planks+=`<rect x="-200" y="${y}" width="760" height="${i?1.6:3}" fill="#3a2008" opacity=".42"/>`;
+    const nxt=rows[i+1]||y+110, step=70+i*22;
+    for(let k=-6;k<14;k++){const x=k*step+((i%2)*step/2);planks+=`<rect x="${x}" y="${y}" width="1.3" height="${nxt-y}" fill="#3a2008" opacity=".3"/>`;}});
+  s+=`<g id="gFloor">
+    <rect x="-200" y="346" width="760" height="520" fill="url(#gFloorG)"/>
+    <rect x="-200" y="346" width="760" height="520" filter="url(#fWood)" opacity=".55" style="mix-blend-mode:multiply"/>
+    ${planks}
+    <rect x="-200" y="346" width="760" height="22" fill="#2a1500" opacity=".25" filter="url(#fB4)"/>
+    <ellipse cx="180" cy="400" rx="230" ry="62" fill="url(#gSpot)" style="mix-blend-mode:screen"/>
+  </g>`;
+
+  // ---------- 世界(キャラ・小物)
+  const boxA=boxSVG('bA',100,92,'A'), boxB=boxSVG('bB',80,72,'B');
+  // 3.3倍の吹き出し・カード
+  function bagsIcon(n){let r='';
+    if(n===3){for(let i=0;i<3;i++)r+=`<g transform="translate(${-14+i*14},0)">${bag(10,14)}</g>`;}
+    else{for(let i=0;i<10;i++){const rr=i<5?0:1,cc=i%5;r+=`<g transform="translate(${-14+cc*7.2},${rr?-14:0})">${bag(6.2,8.6)}</g>`;}}
+    return r;}
+  function card(id,lab,n,res,form){
+    return `<g id="${id}"><g id="${id}r"><rect x="-148" y="0" width="296" height="66" rx="8" fill="#FBF4E2" stroke="#d8c79c" stroke-width="1.2" filter="url(#fDrop3)"/>`+
+      `<rect x="-148" y="0" width="296" height="66" rx="8" fill="url(#pWeave)" opacity=".5"/>`+
+      `<rect x="-24" y="-7" width="48" height="13" fill="#ecdcae" opacity=".85" transform="rotate(-3)"/>`+
+      `<circle cx="-126" cy="33" r="14" fill="${INK}"/><text x="-126" y="39" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="16" fill="#fff">${lab}</text>`+
+      `<g transform="translate(-81,${n===3?40:46})">${bagsIcon(n)}</g>`+
+      `<text x="-44" y="25" font-family="Noto,sans-serif" font-weight="800" font-size="13" fill="#55493a">${form}</text>`+
+      `<rect id="${id}mk" x="-46" y="31" width="120" height="29" rx="5" fill="${YEL}"/>`+
+      `<text id="${id}n" x="-40" y="55" font-family="Dela,Noto,sans-serif" font-size="26" fill="${INK}">0</text>`+
+      `<text id="${id}u" x="60" y="55" font-family="Noto,sans-serif" font-weight="900" font-size="12" fill="${INK}">円/kg</text>`+
+      `</g></g>`;
+  }
+  s+=`<g id="gWorld">
+    <g id="shadows" style="mix-blend-mode:multiply">
+      <ellipse id="shM" rx="30" ry="6.5" fill="#2a1200" opacity=".4" filter="url(#fB2)"/>
+      <ellipse id="shH" rx="48" ry="7" fill="#2a1200" opacity=".42" filter="url(#fB2)"/>
+      <ellipse id="shA" rx="52" ry="7" fill="#2a1200" opacity=".4" filter="url(#fB2)"/>
+      <ellipse id="shB" rx="42" ry="6.5" fill="#2a1200" opacity=".4" filter="url(#fB2)"/>
+    </g>
+    <g id="ghosts">
+      ${[1,2,3].map(i=>`<g id="gM${i}"><circle cy="-36" r="36" fill="#FFC72E"/></g>`).join('')}
+      ${[1,2,3].map(i=>`<g id="gH${i}"><rect x="-33" y="-72" width="66" height="70" rx="10" fill="#4b5058"/></g>`).join('')}
+      ${[1,2,3].map(i=>`<g id="gA${i}"><rect x="-50" y="-92" width="100" height="92" fill="#c99556"/></g>`).join('')}
+      ${[1,2,3].map(i=>`<g id="gB${i}"><rect x="-40" y="-72" width="80" height="72" fill="#c99556"/></g>`).join('')}
+    </g>
+    <g id="puffs">${[0,1].map(k=>[0,1,2,3,4,5].map(i=>`<circle id="pf${k}${i}" r="6" fill="#efe3c6" filter="url(#fB2)"/>`).join('')).join('')}</g>
+    <!-- はかり -->
+    <g id="hak"><g id="hakIn">
+      <rect x="-26" y="-6" width="14" height="6" rx="2" fill="#15171a"/><rect x="12" y="-6" width="14" height="6" rx="2" fill="#15171a"/>
+      <rect x="-33" y="-70" width="66" height="66" rx="11" fill="url(#gHak)" filter="url(#fDrop2)"/>
+      <rect x="-30" y="-67" width="22" height="7" rx="3.5" fill="#fff" opacity=".18"/>
+      <path d="M-22 -22 A22 22 0 0 1 22 -22Z" fill="#f6f1e3" stroke="#0e0f11" stroke-width="1.4"/>
+      <g id="hkTicks">${[0,1,2,3,4,5,6,7,8,9,10].map(i=>{const a=Math.PI*(1-i/10);return `<line x1="${f2(Math.cos(a)*17)}" y1="${f2(-22-Math.sin(a)*17)}" x2="${f2(Math.cos(a)*21)}" y2="${f2(-22-Math.sin(a)*21)}" stroke="${INK}" stroke-width="${i%5?1:1.6}"/>`}).join('')}</g>
+      <text x="-14" y="-25.5" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="5.5" fill="${INK}">0</text><text x="14" y="-25.5" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="5.5" fill="${INK}">10</text>
+      <g id="hkNd" transform="translate(0,-22)"><path d="M-1.6 0 L0 -20 L1.6 0Z" fill="#E5391B"/><circle r="2.6" fill="${INK}"/></g>
+      <g id="hkEye" transform="translate(0,-55)">
+        <g transform="translate(-13,0)"><rect id="hkEwL" x="-6" y="-6" width="12" height="12" rx="3" fill="#fff"/><circle id="hkPuL" r="2.8" fill="${INK}"/><path id="hkHaL" d="M-6 1 L0 -5 L6 1" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0"/></g>
+        <g transform="translate(13,0)"><rect id="hkEwR" x="-6" y="-6" width="12" height="12" rx="3" fill="#fff"/><circle id="hkPuR" r="2.8" fill="${INK}"/><path id="hkHaR" d="M-6 1 L0 -5 L6 1" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0"/></g>
+      </g>
+      <rect x="-50" y="-76" width="100" height="9" rx="4" fill="url(#gPlate)" stroke="#6d737b" stroke-width="1.2"/>
+      <rect x="-46" y="-75" width="40" height="2" rx="1" fill="#fff" opacity=".8"/>
+      <path id="hkSw" d="M30 -62 q3 6 0 9 q-3 -3 0 -9Z" fill="#7fd0ff" stroke="#2a7fb5" stroke-width=".8" opacity="0"/>
+    </g></g>
+    <!-- 箱 -->
+    <g id="boxB">${boxB}</g>
+    <g id="boxA">${boxA}</g>
+    <g id="chipA"><circle r="11" fill="${INK}" stroke="#fff" stroke-width="1.6"/><text y="5" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="14" fill="#fff">A</text></g>
+    <g id="chipB"><circle r="11" fill="${INK}" stroke="#fff" stroke-width="1.6"/><text y="5" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="14" fill="#fff">B</text></g>
+    <!-- まる -->
+    <g id="burstM"></g>
+    <g id="maru"><g id="maruIn">
+      <ellipse cx="-14" cy="-3" rx="10" ry="5.5" fill="#cf8a0a"/><ellipse cx="14" cy="-3" rx="10" ry="5.5" fill="#cf8a0a"/>
+      <g id="mArmL" transform="translate(-33,-25)"><path d="M0 0 L0 17" stroke="#E49A0C" stroke-width="8" stroke-linecap="round"/></g>
+      <circle cy="-36" r="36" fill="url(#gMaru)" filter="url(#fDrop2)"/>
+      <ellipse cx="-12" cy="-54" rx="13" ry="6.5" fill="#fff" opacity=".42" transform="rotate(-28 -12 -54)"/>
+      <g id="mArmR" transform="translate(33,-25)"><path d="M0 0 L0 17" stroke="#FFC12A" stroke-width="8" stroke-linecap="round"/></g>
+      <g id="mFace" transform="translate(0,-38)">
+        <circle cx="-21.5" cy="7" r="5.6" fill="#ff8a6b" id="mChL"/><circle cx="21.5" cy="7" r="5.6" fill="#ff8a6b" id="mChR"/>
+        <g id="mEL" transform="translate(-12.5,-3)"><g id="mEyL"><ellipse id="mEwL" rx="8.4" ry="9.4" fill="#fff" stroke="#6b4210" stroke-width="1.2"/><circle id="mPuL" r="4.6" fill="#2a1d0d"/><circle id="mPhL" r="1.6" fill="#fff"/></g><path id="mHaL" d="M-7.5 2.5 Q0 -8.5 7.5 2.5" stroke="#4a2a08" stroke-width="3.4" fill="none" stroke-linecap="round" opacity="0"/></g>
+        <g id="mER" transform="translate(12.5,-3)"><g id="mEyR"><ellipse id="mEwR" rx="8.4" ry="9.4" fill="#fff" stroke="#6b4210" stroke-width="1.2"/><circle id="mPuR" r="4.6" fill="#2a1d0d"/><circle id="mPhR" r="1.6" fill="#fff"/></g><path id="mHaR" d="M-7.5 2.5 Q0 -8.5 7.5 2.5" stroke="#4a2a08" stroke-width="3.4" fill="none" stroke-linecap="round" opacity="0"/></g>
+        <path id="mBrL" d="M-6.5 0 L6.5 0" stroke="#5a3a10" stroke-width="2.8" stroke-linecap="round"/><path id="mBrR" d="M-6.5 0 L6.5 0" stroke="#5a3a10" stroke-width="2.8" stroke-linecap="round"/>
+        <path id="mMo" fill="#5a2410" stroke="#5a2410" stroke-width="2.2" stroke-linejoin="round"/>
+        <path id="mSw" d="M26 -14 q6 10 0 14 q-6 -4 0 -14Z" fill="#8fd6ff" stroke="#2a7fb5" stroke-width="1" opacity="0"/>
+      </g>
+    </g></g>
+    <g id="sparks">${[0,1,2,3,4].map(i=>`<path id="sk${i}" d="M0 -9 Q1 -1 9 0 Q1 1 0 9 Q-1 1 -9 0 Q-1 -1 0 -9Z" fill="#fff6bd" stroke="#e8a30c" stroke-width="1"/>`).join('')}</g>
+    <g id="bub"><use href="#bubS" stroke="#3a3a40" stroke-width="5" fill="#3a3a40"/><use href="#bubS" fill="#fffdf5"/><circle id="bubT1" r="5" fill="#fffdf5" stroke="#3a3a40" stroke-width="1.6"/><circle id="bubT2" r="3" fill="#fffdf5" stroke="#3a3a40" stroke-width="1.4"/><text id="bubTx" y="8" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="24" fill="${INK}"></text></g>
+    <text id="lbl" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="44" fill="${YEL}" stroke="${INK}" stroke-width="8" stroke-linejoin="round" paint-order="stroke" filter="url(#fDrop1)"></text>
+    <g id="burstH"></g>
+    <!-- カード -->
+    <g id="chip"><rect id="chipR" x="-96" y="0" width="192" height="23" rx="11.5" fill="${INK}" filter="url(#fDrop1)"/><text id="chipT" y="16.5" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="13" fill="${YEL}">寄付額 ÷ 量(kg)</text></g>
+    ${card('cdA','A',3,'3,333','10,000円 ÷ 3kg')}
+    ${card('cdB','B',10,'1,000','10,000円 ÷ 10kg')}
+    <g id="x33"><g id="x33r"><rect x="-38" y="-25" width="76" height="50" rx="11" fill="${YEL}" stroke="${INK}" stroke-width="2.4" filter="url(#fDrop2)"/><rect x="-34" y="-21" width="68" height="42" rx="8" fill="none" stroke="${INK}" stroke-width="1" stroke-dasharray="3 2.5" opacity=".55"/><text y="-7" text-anchor="middle" font-family="Noto,sans-serif" font-weight="900" font-size="11" fill="${INK}">量が</text><text y="15" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="22" textLength="56" lengthAdjust="spacingAndGlyphs" fill="${INK}">3.3倍</text></g></g>
+    ${['sf1','sf2','sf3','sf4'].map(id=>`<text id="${id}" text-anchor="middle" font-family="Dela,Noto,sans-serif" font-size="22" fill="#fff" stroke="${INK}" stroke-width="5" stroke-linejoin="round" paint-order="stroke"></text>`).join('')}
+  </g>`;
+  svg.innerHTML=s;
+  // バーストの線を作る
+  const mk=(id,n)=>{let r='';for(let i=0;i<n;i++)r+=`<line id="${id}${i}" stroke="#fff6bd" stroke-width="2.6" stroke-linecap="round" opacity="0"/>`;document.getElementById(id==='bm'?'burstM':'burstH').innerHTML=r;};
+  mk('bm',14);mk('bh',14);
+}
+build();
+const $=id=>document.getElementById(id);
+const el={};
+['gWall','gFloor','gWorld','shM','shH','shA','shB','hak','hakIn','hkNd','hkEwL','hkEwR','hkPuL','hkPuR','hkHaL','hkHaR','hkSw','boxA','boxB','chipA','chipB','maru','maruIn','mArmL','mArmR','mFace','mEyL','mEyR','mEwL','mEwR','mPuL','mPuR','mPhL','mPhR','mHaL','mHaR','mBrL','mBrR','mMo','mSw','mChL','mChR','bub','bubT1','bubT2','bubTx','lbl','chip','chipT','chipR','cdA','cdAr','cdAn','cdAmk','cdAu','cdB','cdBr','cdBn','cdBmk','cdBu','x33','x33r','sf1','sf2','sf3','sf4','fade','nLt','nR','cap','sparks'].forEach(k=>el[k]=$(k));
+const T=(e,s)=>e.setAttribute('transform',s);
+
+// =====================================================================
+// 時刻 t だけで決まる「ポーズ」
+// =====================================================================
+const MH=[[.15,.38,20],[.68,.38,20],[1.2,.4,18],[3.55,.55,50,.3],[4.6,.3,14],[6.25,.2,9],[6.6,.2,9],[7.0,.2,9],[8.1,.5,66,.36],[11.3,.3,12],[16.85,.36,36,.3],[19.0,.4,30],[20.2,.4,30],[21.45,.5,50,.28],[22.9,.4,26],[23.8,.4,26]];
+const MX=[[0,-50,'lin'],[1.9,54,'out'],[3.4,54],[3.95,60],[8.0,60],[8.4,60,'out'],[16.6,58],[17.1,72],[18.5,72],[19.3,104],[25,104]];
+function maruPose(t){
+  const f=hops(t,MH);
+  const slump=kf(t,[[8.9,0],[9.6,1,'out'],[11.2,1],[11.9,0],[16.8,0],[17.6,.6],[18.6,0]]);
+  const rot=kf(t,[[0,0],[3.4,0],[3.6,-8,'out'],[4.3,0],[6.2,0],[6.3,-6],[6.45,5],[6.6,-5],[6.75,5],[7.0,-3],[7.2,0],[8.1,0],[8.2,-14,'out'],[8.7,6],[9.3,0],[17.0,0],[17.1,9,'out'],[17.6,0],[19.0,0],[19.4,-8],[20,8],[20.6,-8],[21.2,0],[21.6,0],[21.75,10],[22.3,0]]);
+  return{x:kf(t,MX),h:f.dy,sx:f.sx*(1+.07*slump),sy:f.sy*(1-.1*slump),rot};
+}
+function maruLook(t){
+  return[kf(t,[[0,1],[1.9,.9],[2.0,.9],[2.6,1],[3.0,.9],[3.4,.8],[6.0,.8],[6.3,.5],[8.0,.6],[8.15,0],[9.4,-.1],[9.8,0],[10.5,.1],[11.5,.9],[16.8,1],[17.0,.9],[18.3,.9],[18.9,0],[25,0]]),
+         kf(t,[[0,0],[2.0,.1],[2.6,-.05],[3.4,.2],[6.0,.3],[6.3,.6],[8.0,.6],[8.15,-.3],[9.4,.3],[9.8,.8],[11.2,.8],[11.6,0],[16.8,-.1],[17.0,-.4],[18.3,-.3],[18.9,0],[25,0]])];
+}
+function maruMood(t,p){
+  const o={};
+  o.c=kf(t,[[0,.7],[2.0,.3],[3.4,.3],[3.65,1],[5.9,1],[6.4,.2],[8.0,.3],[8.2,-.1],[8.5,-.2],[9.5,-.9],[11.4,-.8],[12.4,-.2],[16.7,0],[16.95,-.2],[18.0,.3],[18.9,1],[25,1]]);
+  o.open=kf(t,[[0,0],[3.5,0],[3.7,.9],[4.4,.2],[5.0,0],[8.1,0],[8.22,1.4,'out'],[9.0,.5],[9.8,.1],[16.85,0],[17.0,1.4,'out'],[17.8,.4],[18.4,0],[19.0,0],[19.3,.8],[21.3,.5],[21.6,1.2],[22.4,.4],[25,.4]]);
+  o.hap=kf(t,[[3.55,0],[3.7,1],[4.9,1],[5.1,0],[19.2,0],[19.4,1],[25,1]]);
+  o.shock=kf(t,[[8.0,0],[8.15,1],[9.2,1],[9.8,0],[16.85,0],[17.0,1],[18.0,1],[18.4,0]]);
+  o.sad=kf(t,[[8.9,0],[9.6,1],[11.2,1],[11.9,0]]);
+  o.sweat=kf(t,[[9.2,0],[9.6,1],[11.2,1],[11.6,0],[17.0,0],[17.3,1],[18.2,1],[18.5,0]]);
+  o.aR=kf(t,[[0,15],[3.3,15],[3.5,65,'out'],[5.8,65],[6.1,40],[8.05,40],[8.15,150,'out'],[8.8,60],[9.5,12],[17.0,12],[17.1,140,'out'],[17.8,50],[18.4,12],[19.2,12],[19.4,170,'out'],[25,170]])+(t>19.5?9*Math.sin(t*9):0);
+  o.aL=kf(t,[[0,15],[8.1,15],[8.15,150,'out'],[8.8,60],[9.5,12],[17.0,12],[17.1,140,'out'],[17.8,50],[18.4,12],[19.2,12],[19.4,170,'out'],[25,170]])+(t>19.5?9*Math.sin(t*9+2):0);
+  return o;
+}
+function blink(t){const ph=(t+.9)%3.3;return ph<.15?1-.9*(1-Math.abs(ph-.075)/.075):1;}
+
+// はかり
+const HX=[[0,470,'lin'],[11.15,470],[11.95,222,'out'],[25,222]];
+function hakVal(t){
+  if(t<12.4)return 0;
+  if(t<15.05)return 3*(1-sp(t-12.4,7,18));
+  if(t<16.15)return kf(t,[[15.05,3,'out'],[15.5,0],[16.15,0]]);
+  return 10*(1-sp(t-16.15,5.5,15));
+}
+function hakPose(t){
+  const x=kf(t,HX),v=(x-kf(t-.04,HX))/.04,st=C(Math.abs(v)/1400,0,.32);
+  const s=t-11.95,lq=s>0?.14*Math.exp(-9*s)*Math.cos(24*s):0;
+  const kg=hakVal(t);
+  // 15.0 に箱を「ぽいっ」: 伸びる
+  const toss=(t>15.0&&t<15.5)?.14*Math.sin((t-15)/.5*Math.PI):0;
+  return{x,h:0,kg,sy:(1-.024*kg-lq+toss)/Math.pow(1+st,.6),sx:(1+.011*kg+lq*.8-toss*.5)*(1+st),rot:0};
+}
+const plateY=t=>74*hakPose(t).sy;
+
+// 箱A
+const AH=[[6.3,.14,5,.1],[6.65,.14,5,.1],[7.05,.3,12,.2],[8.2,.2,6,.1]];
+function boxAPose(t){
+  const t1=11.75,t2=12.4,t3=15.0,t4=15.6;
+  let x=158,y=0,rot=0,sx=1,sy=1;
+  const hp=hops(t,AH);y+=hp.dy;sx*=hp.sx;sy*=hp.sy;
+  rot=kf(t,[[6.2,0],[6.3,-3],[6.45,3],[6.6,-3],[6.75,3],[7.0,0]]);
+  if(t>=t1-.14&&t<t1){sy*=1-.2*E.sin((t-(t1-.14))/.14);}
+  if(t>=t1&&t<t2){const u=(t-t1)/(t2-t1);x=L(158,222,E.io(u));y=L(0,74,E.io(u))+34*Math.sin(Math.PI*u);rot=-7*Math.sin(Math.PI*u);}
+  else if(t>=t2&&t<t3){x=222;y=plateY(t);const s=t-t2,q=.13*Math.exp(-9*s)*Math.cos(24*s);sy*=1-q;sx*=1+q*.8;}
+  else if(t>=t3){const u=C((t-t3)/(t4-t3));x=222+10*u;y=plateY(t3)+620*E.in(u);rot=22*u;}
+  return{x,h:y,sx,sy,rot};
+}
+const BH=[[8.2,.2,5,.1]];
+function boxBPose(t){
+  let x=256,y=0,rot=0,sx=1,sy=1;
+  const hp=hops(t,BH);y+=hp.dy;sx*=hp.sx;sy*=hp.sy;
+  if(t>=11.0&&t<11.75){const u=(t-11.0)/.75;x=L(256,450,E.in(u));y=36*Math.sin(Math.PI*u);rot=10*u;}
+  else if(t>=11.75&&t<15.5){x=450;}
+  else if(t>=15.5&&t<16.15){const u=(t-15.5)/.65;x=L(450,222,E.out(u));y=L(14,74,E.io(u))+30*Math.sin(Math.PI*u);rot=-5*Math.sin(Math.PI*u);}
+  else if(t>=16.15){x=222;y=plateY(t);const s=t-16.15,q=.22*Math.exp(-8*s)*Math.cos(22*s);sy*=1-q;sx*=1+q*.8;}
+  return{x,h:y,sx,sy,rot};
+}
+const mkPose=(p)=>`translate(${f2(p.x)} ${f2(GY-p.h)}) rotate(${f2(p.rot)}) scale(${f2(p.sx)} ${f2(p.sy)})`;
+
+// ---- 残像(過去の位置を3つ重ねる)
+function ghost(prefix,fn,t,amt){
+  const p=fn(t),q=fn(t-.06);
+  const sp0=Math.hypot(p.x-q.x,p.h-q.h)+60*Math.abs(p.sy-q.sy);
+  const base=C((sp0-6)/22,0,1)*amt;
+  for(let i=1;i<=3;i++){
+    const g=el[prefix+i]||(el[prefix+i]=$(prefix+i));
+    const pp=fn(t-.045*i);
+    g.setAttribute('transform',mkPose(pp));
+    g.setAttribute('opacity',f2(base*(.5-.13*(i-1))));
+  }
+}
+
+// =====================================================================
+// 描画
+// =====================================================================
+const CAPS=[
+ [0.4,3.3,[[['同じ '],['10,000円',1],['の']],[['箱が ふたつ']]]],
+ [3.4,6.0,[[['安そう',1],['な Aを']],[['えらんだ!']]]],
+ [6.1,8.3,[[['さっそく']],[['あけてみると…']]]],
+ [8.5,11.2,[[['あれ?']],[['量が '],['少ない…',1]]]],
+ [11.35,13.2,[[['はかりに']],[['のせてみよう']]]],
+ [13.3,15.6,[[['A は '],['3kg',1]]]],
+ [16.1,18.4,[[['B は '],['10kg',1],['!']]]],
+ [18.6,21.9,[[['寄付額 ÷ 量(kg)',1],['で']],[['くらべよう']]]],
+ [22.0,25.2,[[['同じ寄付額でも']],[['量は '],['ちがう',1]]]],
+];
+let capIdx=-2,capEls=[];
+// 字幕の各行が舞台の幅(316px)を超えたら縮める(フォントが遅れて読み込まれても崩れない)
+function fitCap(){
+  el.cap.querySelectorAll('.ln').forEach(d=>{d.style.transform='';const w=d.offsetWidth;if(w>260)d.style.transform='scale('+(260/w).toFixed(3)+')';});
+}
+function setCap(idx){
+  if(idx===capIdx)return;capIdx=idx;capEls=[];
+  const box=el.cap;box.innerHTML='';
+  if(idx<0)return;
+  let j=0;
+  CAPS[idx][2].forEach(line=>{
+    const d=document.createElement('span');d.className='ln';
+    line.forEach(seg=>{
+      const w=document.createElement('span');
+      if(seg[1]){w.className='hl';}
+      const info={w:w,hl:!!seg[1],first:j,chs:[]};
+      [...seg[0]].forEach(chr=>{const c=document.createElement('span');c.className='ch';c.textContent=chr;w.appendChild(c);info.chs.push({e:c,j:j++});});
+      d.appendChild(w);capEls.push(info);
+    });
+    box.appendChild(d);
+  });
+  fitCap();
+}
+function drawCap(t){
+  let idx=-1;for(let i=0;i<CAPS.length;i++)if(t>=CAPS[i][0]&&t<CAPS[i][1]){idx=i;break;}
+  setCap(idx);if(idx<0)return;
+  const [a,b]=CAPS[idx],s=t-a,out=C((b-t)/.25);
+  el.cap.style.opacity=f2(out);
+  capEls.forEach(w=>{
+    w.chs.forEach(c=>{
+      const u=C((s-c.j*.045)/.22);
+      c.e.style.opacity=f2(u);
+      c.e.style.transform=`translateY(${f2((1-E.out(u))*7)}px)`;
+      c.e.style.filter=u<1?`blur(${f2((1-u)*4)}px)`:'none';
+    });
+    if(w.hl){const u=C((s-w.first*.045)/.2);w.w.style.background=`rgba(255,210,63,${f2(u)})`;w.w.style.boxShadow=`0 2px 0 rgba(0,0,0,${f2(.28*u)})`;}
+  });
+}
+
+const BOXTAGS={A:{ph:0.7},B:{ph:2.1}};
+function drawBox(id,key,fn,t,shEl,openT){
+  const p=fn(t);
+  T(el[key],mkPose(p));
+  // 残像
+  // 値札のゆれ
+  const q=fn(t-.08),vx=(p.x-q.x)/.08;
+  const sw=C(-vx*.05,-35,35)+5*Math.sin(5*t+BOXTAGS[id].ph)+(p.h-q.h)*.0;
+  const tgr=$(id==='A'?'bAtgr':'bBtgr');
+  tgr.setAttribute('transform',`rotate(${f2(sw)})`);
+  // 開く
+  const o=openT;
+  const flap=t<o.flaps?0:1-sp(t-o.flaps,8,20);
+  $(id==='A'?'bAfl':'bBfl').setAttribute('transform',`translate(0,${-(id==='A'?92:72)}) scale(1 ${f2(Math.max(0,flap))}) translate(0,${(id==='A'?92:72)})`);
+  const fo=C((t-o.front)/.3),fe=E.out(fo);
+  const H=id==='A'?92:72;
+  const fr=$(id==='A'?'bAfr':'bBfr');
+  if(t<o.front){fr.setAttribute('transform','');fr.style.opacity=1;}
+  else{fr.setAttribute('transform',`scale(1 ${f2(L(1,.1,fe))})`);fr.style.opacity=1;}
+  // テープ
+  const rp=C((t-o.tape)/.25);
+  const tc=$(id==='A'?'bAtc':'bBtc'),tpe=$(id==='A'?'bAtp':'bBtp');
+  tpe.setAttribute('transform',`translate(0,${-H}) scale(1 ${f2(1-rp)}) translate(0,${H})`);
+  tc.setAttribute('transform',`translate(0,${-H-rp*(1-rp)*20}) rotate(${f2(rp*70)})`);
+  tc.setAttribute('opacity',rp>0&&rp<1?1:0);
+  // ふくろの弾み
+  const bt=o.bags;
+  const n=id==='A'?3:5;
+  for(let i=0;i<n;i++){
+    const g=$((id==='A'?'bA':'bB')+'b'+i);
+    const s=t-(bt+i*.07);
+    g.setAttribute('transform',`translate(0,${f2(s>0?-12*Math.exp(-6*s)*Math.abs(Math.sin(15*s)):0)})`);
+    if(id==='B'){const g2=$('bBc'+i),s2=t-(bt+.12+i*.07);g2.setAttribute('transform',`translate(0,${f2(s2>0?-9*Math.exp(-6*s2)*Math.abs(Math.sin(15*s2)):0)})`);}
+  }
+  // 影
+  const hh=p.h;
+  shEl.setAttribute('cx',f2(p.x+5));shEl.setAttribute('cy',GY+3);
+  shEl.setAttribute('opacity',f2(.4*C(1-hh/90)));
+  shEl.setAttribute('rx',f2((id==='A'?52:42)*(1-C(hh/260))));
+}
+
+function bubble(t){
+  const mp=maruPose(t);
+  let a=0,txt='',kind=0;
+  const w1=C(Math.min((t-1.95)/.2,(3.3-t)/.2)),w2=C(Math.min((t-9.2)/.25,(11.3-t)/.25)),w3=C(Math.min((t-16.9)/.2,(18.4-t)/.2));
+  if(w1>0){a=w1;txt='？';}
+  else if(w2>0){a=w2;kind=2;}
+  else if(w3>0){a=w3;txt='！？';}
+  const b=el.bub;
+  if(a<=0){b.setAttribute('opacity',0);return;}
+  const bx=mp.x+44,by=GY-mp.h-112-4*Math.sin(t*3);
+  const sc=L(.4,1,E.back(a));
+  b.setAttribute('transform',`translate(${f2(bx)} ${f2(by)}) scale(${f2(sc)})`);
+  b.setAttribute('opacity',f2(a));
+  el.bubT1.setAttribute('cx',-24);el.bubT1.setAttribute('cy',26);
+  el.bubT2.setAttribute('cx',-34);el.bubT2.setAttribute('cy',38);
+  el.bubTx.setAttribute('transform','');
+  if(kind===2){const n=1+Math.floor((t*2.4)%3);el.bubTx.textContent='・'.repeat(n);el.bubTx.setAttribute('font-size','30');el.bubTx.setAttribute('y','4');}
+  else{el.bubTx.textContent=txt;el.bubTx.setAttribute('font-size','24');el.bubTx.setAttribute('y','8');}
+}
+
+function burst(prefix,t,t0,dur,cx,cy,r0,r1,n){
+  const u=(t-t0)/dur;
+  for(let i=0;i<n;i++){
+    const e=$(prefix+i);
+    if(u<0||u>1){e.setAttribute('opacity',0);continue;}
+    const a=i/n*Math.PI*2+hs(i)*.25,k=E.out(u),ra=L(r0,r1,k),rb=ra+L(18,4,u)+hs(i+9)*8;
+    e.setAttribute('x1',f2(cx+Math.cos(a)*ra));e.setAttribute('y1',f2(cy+Math.sin(a)*ra));
+    e.setAttribute('x2',f2(cx+Math.cos(a)*rb));e.setAttribute('y2',f2(cy+Math.sin(a)*rb));
+    e.setAttribute('opacity',f2(1-u));
+  }
+}
+function puff(k,t,t0,cx){
+  const u=(t-t0)/.7;
+  for(let i=0;i<6;i++){const e=$('pf'+k+i);
+    if(u<0||u>1){e.setAttribute('opacity',0);continue;}
+    const dir=(i%2?1:-1),d=(1+Math.floor(i/2))*14;
+    e.setAttribute('cx',f2(cx+dir*d*E.out(u)));e.setAttribute('cy',f2(GY+2-8*E.out(u)-i*1.5));
+    e.setAttribute('r',f2(5+5*u+i));e.setAttribute('opacity',f2(.8*(1-u)));}
+}
+function sfx(id,txt,x,y,t,t0,dur,size,rot){
+  const e=el[id],u=(t-t0)/dur;
+  if(u<0||u>1){e.setAttribute('opacity',0);return;}
+  e.textContent=txt;e.setAttribute('font-size',size);
+  const sc=u<.18?L(.3,1,E.back(u/.18)):1;
+  const op=u>.75?1-(u-.75)/.25:1;
+  const sh=u<.5?2.5*Math.sin(u*80):0;
+  e.setAttribute('transform',`translate(${f2(x+sh)} ${f2(y)}) rotate(${rot}) scale(${f2(sc)})`);
+  e.setAttribute('opacity',f2(op));
+}
+const countS=(v)=>Math.round(v).toLocaleString('en-US');
+
+function draw(t){
+  // ---- カメラ(ゆっくり押す)。壁は動きを小さく=視差
+  const cs=kf(t,[[0,1.03],[3.2,1],[3.4,1],[5.2,1.1],[6.4,1.1],[7.0,1.08],[10.6,1.08],[11.5,1],[16.2,1],[17.0,1.1],[18.2,1.1],[18.8,1],[25,1]]);
+  const cx=kf(t,[[0,170],[3.4,105],[5.2,110],[7.0,140],[10.6,140],[11.5,180],[16.2,180],[17.0,200],[18.2,200],[18.8,180],[25,180]]);
+  const cy=kf(t,[[0,330],[7,330],[10.6,330],[11.5,330],[16.2,330],[17,300],[18.2,300],[18.8,330],[25,330]]);
+  const cam=d=>`translate(${f2(cx)} ${f2(cy)}) scale(${f2(1+(cs-1)*d)}) translate(${f2(-cx)} ${f2(-cy)})`;
+  T(el.gWall,cam(.45));T(el.gFloor,cam(.8));T(el.gWorld,cam(1));
+
+  // ---- まる
+  const mp=maruPose(t),mo=maruMood(t),lk=maruLook(t);
+  T(el.maruIn,mkPose(mp).replace(/translate\([^)]*\)\s*/,''));
+  T(el.maru,`translate(${f2(mp.x)} ${f2(GY-mp.h)})`);
+  // 顔
+  const bl=blink(t),happy=mo.hap,es=1+.22*mo.shock,ps=1-.42*mo.shock;
+  const eyeOp=1-happy;
+  ['L','R'].forEach((k,ix)=>{
+    el['mEw'+k].setAttribute('rx',f2(8.4*es));el['mEw'+k].setAttribute('ry',f2(9.4*es*(happy>.5?1:bl)));
+    el['mPu'+k].setAttribute('r',f2(4.6*ps));
+    const px=lk[0]*3.6*es,py=lk[1]*3.6*es*bl;
+    el['mPu'+k].setAttribute('cx',f2(px));el['mPu'+k].setAttribute('cy',f2(py));
+    el['mPh'+k].setAttribute('cx',f2(px-1.6));el['mPh'+k].setAttribute('cy',f2(py-1.8));
+    el['mEy'+k].setAttribute('opacity',f2(eyeOp));
+    el['mHa'+k].setAttribute('opacity',f2(happy));
+  });
+  // 眉(悲しみ=内側が上がる / 驚き=全体が上がる)
+  el.mBrL.setAttribute('transform',`translate(-12.5 ${f2(-17-7*mo.shock-3*happy)}) rotate(${f2(-20*mo.sad)})`);
+  el.mBrR.setAttribute('transform',`translate(12.5 ${f2(-17-7*mo.shock-3*happy)}) rotate(${f2(20*mo.sad)})`);
+  // 口
+  {const c=mo.c,w=9+3*(mo.open>.6?-.5:0),y0=-4*c,ymt=y0+5*c-1.5*c*c*0,open=mo.open;
+   const top=ymt-open*.0,bot=ymt+2+open*9;
+   const w2=w*(1-.25*C(open/1.4));
+   el.mMo.setAttribute('d',`M${f2(-w2)} ${f2(y0)} Q0 ${f2(2*top-y0)} ${f2(w2)} ${f2(y0)} Q0 ${f2(2*bot-y0)} ${f2(-w2)} ${f2(y0)}Z`);
+   el.mMo.setAttribute('transform','translate(0,14)');}
+  el.mChL.setAttribute('opacity',f2(.35+.5*happy+.2*mo.sad*0));el.mChR.setAttribute('opacity',f2(.35+.5*happy));
+  // 汗
+  {const s=mo.sweat;el.mSw.setAttribute('opacity',f2(s));el.mSw.setAttribute('transform',`translate(0,${f2(((t*1.6)%1)*10)})`);}
+  // 腕
+  T(el.mArmL,`translate(-33,-25) rotate(${f2(mo.aL)})`);T(el.mArmR,`translate(33,-25) rotate(${f2(-mo.aR)})`);
+  // 影
+  el.shM.setAttribute('cx',f2(mp.x+4));el.shM.setAttribute('cy',GY+3);el.shM.setAttribute('rx',f2(30*(1-C(mp.h/200))));el.shM.setAttribute('opacity',f2(.4*(1-C(mp.h/160))));
+  ghost('gM',maruPose,t,.75);
+
+  // ---- はかり
+  const hp=hakPose(t);
+  T(el.hak,`translate(${f2(hp.x)} ${GY})`);
+  T(el.hakIn,`scale(${f2(hp.sx)} ${f2(hp.sy)})`);
+  T(el.hkNd,`translate(0,-22) rotate(${f2(Math.min(-90+hp.kg*18,100))})`);
+  {const kg=hp.kg,strain=C((kg-6)/4)*(t>16.15?1:0);
+   const hap=C(Math.min((t-16.25)/.1,(17.9-t)/.3))*(t>16?1:0);
+   ['L','R'].forEach(k=>{el['hkEw'+k].setAttribute('opacity',f2(1-hap));el['hkPu'+k].setAttribute('opacity',f2(1-hap));el['hkHa'+k].setAttribute('opacity',f2(hap));
+     const lx=kf(t,[[11.9,-1],[12.5,0],[16.2,0],[18,.5]]);el['hkPu'+k].setAttribute('cx',f2(lx*2));});
+   el.hkSw.setAttribute('opacity',f2(strain*C((18.4-t)/.4)));el.hkSw.setAttribute('transform',`translate(0,${f2(((t*1.4)%1)*8)})`);}
+  el.shH.setAttribute('cx',f2(hp.x+5));el.shH.setAttribute('cy',GY+3);el.shH.setAttribute('opacity',hp.x>400?0:.42);
+  ghost('gH',(tt)=>{const p=hakPose(tt);return{x:p.x,h:0,sx:p.sx,sy:p.sy,rot:0}},t,.7);
+
+  // ---- 箱
+  drawBox('A','boxA',boxAPose,t,el.shA,{flaps:7.1,front:7.5,tape:6.85,bags:7.75});
+  drawBox('B','boxB',boxBPose,t,el.shB,{flaps:16.25,front:16.35,tape:16.0,bags:16.5});
+  ghost('gA',boxAPose,t,.6);ghost('gB',boxBPose,t,.6);
+  // 箱のラベル(A/B)
+  {const pa=boxAPose(t),pb=boxBPose(t);
+   const aa=C(Math.min((t-2.0)/.3,(6.4-t)/.3)),ab=C(Math.min((t-2.0)/.3,(11.0-t)/.3));
+   const pop=C((t-3.5)/.3);
+   T(el.chipA,`translate(${f2(pa.x)} ${f2(GY-pa.h-92-18-3*Math.sin(t*4)-14*Math.sin(Math.PI*C((t-3.5)/.5)))}) scale(${f2(L(1,1.3,E.back(pop)))})`);
+   el.chipA.setAttribute('opacity',f2(aa));
+   T(el.chipB,`translate(${f2(pb.x)} ${f2(GY-pb.h-72-18-3*Math.sin(t*4+1))})`);el.chipB.setAttribute('opacity',f2(ab*(1-.5*pop)));
+   const ca=el.chipA.firstElementChild;ca.setAttribute('fill',pop>.5?YEL:INK);el.chipA.lastElementChild.setAttribute('fill',pop>.5?INK:'#fff');}
+
+  // ---- 数字ラベル
+  {let txt='',x=0,y=0,u=0,fs=44,tl=0;
+   if(t>=12.9&&t<14.95){txt='3kg';tl=12.9;x=222;y=190;fs=46;u=C(Math.min((t-12.9)/.35,(14.95-t)/.2));}
+   else if(t>=16.2&&t<18.45){txt='10kg';tl=16.2;x=222;y=200;fs=60;u=C(Math.min((t-16.2)/.3,(18.45-t)/.25));}
+   const e=el.lbl;
+   if(!txt||u<=0){e.setAttribute('opacity',0);}
+   else{const s=t-tl,pop=E.back(C(s/.35)),sh=(txt==='10kg'&&s<1.1)?3.2*Math.sin(s*60)*Math.exp(-s*2.4):0;
+     e.textContent=txt;e.setAttribute('font-size',fs);e.setAttribute('opacity',f2(u));
+     e.setAttribute('transform',`translate(${f2(x+sh)} ${f2(y)}) rotate(${f2(txt==='10kg'?-4:-3)}) scale(${f2(L(.3,1,pop))})`);}}
+
+  // ---- 吹き出し・演出
+  bubble(t);
+  // きらきら
+  {const aS=C(Math.min((t-3.6)/.2,(5.4-t)/.3))+C(Math.min((t-19.4)/.3,1));
+   for(let i=0;i<5;i++){const e=$('sk'+i);
+     const a=i/5*Math.PI*2+t*1.3,r=52+5*Math.sin(t*5+i);
+     const sc=aS>0?(.5+.5*Math.abs(Math.sin(t*6+i*1.7)))*.9*Math.min(aS,1):0;
+     e.setAttribute('transform',`translate(${f2(mp.x+Math.cos(a)*r)} ${f2(GY-mp.h-38+Math.sin(a)*r*.85)}) scale(${f2(sc)}) rotate(${f2(t*60+i*30)})`);
+     e.setAttribute('opacity',aS>0?1:0);}}
+  burst('bm',t,8.12,.5,mp.x,GY-mp.h-38,48,92,14);
+  burst('bh',t,16.15,.45,222,GY-110,40,86,14);
+  puff(0,t,11.95,hp.x);puff(1,t,16.15,222);
+  // 擬音
+  sfx('sf1','ビリッ',150,GY-135,t,6.9,.75,20,-8);
+  sfx('sf2','ガーン',mp.x+62,GY-150,t,8.25,1.0,28,-6);
+  sfx('sf3','ドスン',120,GY-80,t,16.15,.8,26,-8);
+  sfx('sf4','ドン!',135,GY-128,t,21.1,.7,22,-6);
+
+  // ---- カード(結)
+  {const dA=kf(t,[[18.6,-190,'out'],[19.05,0]]),dB=kf(t,[[19.1,-210,'out'],[19.55,0]]);
+   const bnA=1-sp(t-18.6-.45,6,16)*0;
+   const settleA=t>19.05?Math.exp(-8*(t-19.05))*Math.sin(30*(t-19.05))*6:0,settleB=t>19.55?Math.exp(-8*(t-19.55))*Math.sin(30*(t-19.55))*6:0;
+   T(el.cdA,`translate(180 ${f2(98+dA+settleA)})`);T(el.cdB,`translate(180 ${f2(166+dB+settleB)})`);
+   T(el.cdAr,'rotate(-1.1)');T(el.cdBr,'rotate(.9)');
+   el.cdA.setAttribute('opacity',t<18.6?0:1);el.cdB.setAttribute('opacity',t<19.1?0:1);
+   const nA=3333*E.out(C((t-19.5)/.9)),nB=1000*E.out(C((t-20.0)/.8));
+   const U='<tspan font-family="Noto" font-weight="900" font-size="12" dx="7">円/kg</tspan>';
+   el.cdAn.innerHTML=(t<19.5?'':'<tspan font-family="Noto" font-size="15" font-weight="900">約</tspan>')+countS(nA)+U;el.cdBn.innerHTML=countS(nB)+U;
+   el.cdAu.setAttribute('opacity',0);el.cdBu.setAttribute('opacity',0);
+   // 黄色マーカーは文字の実測幅に合わせる(単位は同じ text の中に続けて並ぶので、重ならない)
+   const wA=el.cdAn.getComputedTextLength?el.cdAn.getComputedTextLength():0;
+   const wB=el.cdBn.getComputedTextLength?el.cdBn.getComputedTextLength():0;
+   el.cdAmk.setAttribute('width',f2(Math.max(wA,60)+12));
+   el.cdBmk.setAttribute('width',f2(Math.max(wB,60)+12));
+   // 見出し/ブランド
+   const brand=t>=22.2,u1=C(Math.min((t-19.1)/.3,(22.2-t)/.2)),u2=C((t-22.2)/.3);
+   el.chipT.textContent=brand?'割安ナビ ふるさと納税':'寄付額 ÷ 量(kg)';
+   el.chipT.setAttribute('fill',brand?'#fff':YEL);
+   const cu=brand?u2:u1;
+   el.chip.setAttribute('opacity',f2(cu));T(el.chip,`translate(180 ${f2(74+(1-E.out(cu))*-14)})`);
+   // 3.3倍
+   const su=(t-21.1)/.5;
+   if(su<0){el.x33.setAttribute('opacity',0);}
+   else{const sc=su<1?L(2.8,1,E.out(su)):1,sh=su<.5?3*Math.sin(su*90)*(1-su*2):0;
+     el.x33.setAttribute('opacity',f2(C(su/.1)));T(el.x33,`translate(${f2(256+sh)} ${f2(272+(su<1?(1-E.out(su))*-20:0))}) scale(${f2(sc)}) rotate(${f2(-10+(su<1?(1-su)*12:0))})`);
+     T(el.x33r,`rotate(${f2(2.2*Math.sin(t*2.2))})`);}}
+
+  // ---- 注記・フェード
+  el.nLt.textContent=t>=12.3?'たとえ話です ・ 数字は例です':'たとえ話です';
+  el.nR.textContent=t>=22.2?'furusato.wariyasu-navi.com':'';
+  el.fade.style.opacity=f2(.3*C((t-24.2)/.8)); // 最後までブランド名とURLが読める弱いフェード
+  // ---- 字幕
+  drawCap(t);
+  // ---- 粒子の「呼吸」(フィルムの粒を10fpsで動かす)
+  const gr=$('grain');const gk=Math.floor(t*10);gr.style.backgroundPosition=`${(gk*47)%180}px ${(gk*83)%180}px`;
+}
+window.draw=draw;
+
+// =====================================================================
+// HyperFrames 用: タイムライン(paused)の進行を state.t に流し、setter から描く
+//   T=0〜1.0 ポスター(ゆっくり拡大)、T=1.0〜26 本編 draw(T-1.0)
+//   setter はシーク時にも必ず呼ばれる(onUpdate はシーク時に呼ばれないことがあるので使わない)
+// =====================================================================
+const PO=1.0, TOTAL=26;
+const worldEl=$('world'), posterEl=$('poster');
+function render(T){
+  if(T<PO){
+    posterEl.style.display='block';
+    posterEl.style.transform='scale('+f2(1+.04*E.out(C(T/PO)))+')';
+    worldEl.style.visibility='hidden';
+    return;
+  }
+  posterEl.style.display='none';
+  worldEl.style.visibility='visible';
+  draw(T-PO);
+}
+const state={_t:0,get t(){return this._t;},set t(v){this._t=v;render(v);}};
+const tl=gsap.timeline({paused:true});
+tl.to(state,{t:TOTAL,duration:TOTAL,ease:'none'},0);
+window.__timelines=window.__timelines||{};
+window.__timelines['main']=tl;
+render(0);
+
+// フォントが遅れて読み込まれても、字幕の幅合わせ(fitCap)と数字の実測をやり直す
+const refresh=()=>{capIdx=-2;render(state._t);};
+if(document.fonts&&document.fonts.load){
+  Promise.all([document.fonts.load('400 26px Dela','10kg円'),document.fonts.load('900 25px Noto','同じ寄付額でも量はちがう'),document.fonts.load('800 12px Noto','寄付額')].map(p=>p.catch(()=>0))).then(refresh);
+  if(document.fonts.ready)document.fonts.ready.then(refresh);
+}
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+name: render
+
+# Render one HyperFrames project (a folder in this repo) to mp4 on a Linux runner.
+# Manual only. No secrets are used. The result is uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Project folder (e.g. fable-analogy)"
+        required: true
+        default: "fable-analogy"
+      workers:
+        description: "HyperFrames capture workers"
+        required: true
+        default: "3"
+      frames_at:
+        description: "Seconds to grab check frames from the final mp4 (comma separated)"
+        required: true
+        default: "0.5,1.0,4.5,9.4,13.9,17.4,21.5,25.9"
+      crf:
+        description: "x264 CRF for the final mp4"
+        required: true
+        default: "24"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-${{ github.event.inputs.project }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PROJECT: ${{ github.event.inputs.project }}
+      WORKERS: ${{ github.event.inputs.workers }}
+      FRAMES_AT: ${{ github.event.inputs.frames_at }}
+      CRF: ${{ github.event.inputs.crf }}
+      HF: hyperframes@0.8.139
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check inputs
+        run: |
+          [[ "$PROJECT" =~ ^[a-z0-9-]+$ && -f "$PROJECT/index.html" ]] || { echo "bad project: $PROJECT"; exit 1; }
+          [[ "$WORKERS" =~ ^[1-8]$ ]] || { echo "bad workers"; exit 1; }
+          [[ "$CRF" =~ ^[0-9]{2}$ ]] || { echo "bad crf"; exit 1; }
+          [[ "$FRAMES_AT" =~ ^[0-9.,]+$ ]] || { echo "bad frames_at"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          pip install --quiet numpy
+          command -v ffmpeg || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
+          ffmpeg -version | head -1
+          nproc; free -g
+
+      - name: Fonts
+        run: |
+          mkdir -p "$PROJECT/assets/fonts"
+          cp _shared/fonts/*.ttf "$PROJECT/assets/fonts/"
+
+      - name: Doctor
+        working-directory: ${{ github.event.inputs.project }}
+        run: npx --yes "$HF" doctor || true
+
+      - name: Render (silent)
+        working-directory: ${{ github.event.inputs.project }}
+        run: |
+          mkdir -p renders
+          start=$(date +%s)
+          npx --yes "$HF" render --output renders/silent.mp4 --fps 30 --quality looks --workers "$WORKERS" 2>&1 | tee renders/render.log
+          echo "render_seconds=$(( $(date +%s) - start ))" | tee renders/timing.txt
+
+      - name: Audio and compress
+        working-directory: ${{ github.event.inputs.project }}
+        run: |
+          start=$(date +%s)
+          python audio.py renders/silent.mp4 renders/final_raw.mp4
+          ffmpeg -y -loglevel error -i renders/final_raw.mp4 -c:v libx264 -preset slow -crf "$CRF" -pix_fmt yuv420p -c:a copy -movflags +faststart renders/final.mp4
+          echo "audio_compress_seconds=$(( $(date +%s) - start ))" | tee -a renders/timing.txt
+          ls -l renders/final.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 renders/final.mp4 | sed 's/^/duration=/' | tee -a renders/timing.txt
+
+      - name: Check frames
+        working-directory: ${{ github.event.inputs.project }}
+        run: |
+          mkdir -p renders/frames
+          IFS=',' read -ra TS <<< "$FRAMES_AT"
+          for t in "${TS[@]}"; do
+            ffmpeg -y -loglevel error -ss "$t" -i renders/final.mp4 -frames:v 1 "renders/frames/f_${t}.png"
+          done
+
+      - name: Summary
+        working-directory: ${{ github.event.inputs.project }}
+        run: |
+          { echo "### $PROJECT"; echo '```'; cat renders/timing.txt; grep -E "rendered in|capture ·|GPU" renders/render.log | tail -3; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: render-${{ github.event.inputs.project }}
+          path: |
+            ${{ github.event.inputs.project }}/renders/final.mp4
+            ${{ github.event.inputs.project }}/renders/frames/
+            ${{ github.event.inputs.project }}/renders/render.log
+            ${{ github.event.inputs.project }}/renders/timing.txt
+          retention-days: 14
